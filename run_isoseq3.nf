@@ -6,6 +6,8 @@ params.ref_fasta = params.genome ? params.genomes[ params.genome ].fasta_file ?:
 params.intron_max = params.genome ? params.genomes[ params.genome ].intron_max ?: false : false
 params.primers = params.primer_type ? params.primers_stets[ params.primer_type ].primer_file ?: false : false
 
+// params.input is defined in the nextflow call by --input <value>
+// params.output is defined in the nextflow call by --output <value>
 
 log.info "IsoSeq3 NF  ~  version 3.1"
 log.info "====================================="
@@ -30,17 +32,22 @@ Channel
     .fromPath(params.input + '*.bam')
     .ifEmpty { error "Cannot find matching bam files: $params.input." }
     .tap { bam_files }
-    .map{ file -> tuple(file.name.replaceAll(/.bam$/,''), file) }
+
+    // make a matching filename 'base' for every file
+    .map{ file -> tuple(file.name.replaceAll(/.bam$/,''), file) } 
     .tap { bam_names }
 
 Channel
     .fromPath(params.primers)
     .ifEmpty { error "Cannot find primer file: $params.primers" }
-    .into { primers_remove; primers_refine }
+    .into { primers_remove; primers_refine } // puts the primer files into these two channels
 
+// Question: why is the reference a channel? Can't it just be  aregulr 
 Channel
     .fromPath(params.ref_fasta)
-    .ifEmpty { error "Cannot find primer file: $params.primers" }
+
+    // I assume this is a mistake. This should say Cannot find reference file $params.ref_fasta
+    .ifEmpty { error "Cannot find reference file: $params.ref_fasta" }
     .set {ref_fasta}
 
 //TODO replace with specific stating of the pbi
