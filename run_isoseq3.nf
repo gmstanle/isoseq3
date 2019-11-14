@@ -127,7 +127,7 @@ process demux{
 //    lima $bam $primers ${name}.fl.bam --isoseq --no-pbi
 //    """
     """
-    lima --ccs $bam $primers ${name}.trimmed.bam
+    lima --ccs --peek-guess $bam $primers ${name}.trimmed.bam
     """
 }
 
@@ -140,6 +140,8 @@ process run_refine{
     set name, file(bam) from primers_removed_out.dump(tag: 'primers_removed')
     path primers from primers_refine.collect()
     
+
+    // flnc = full-length non-concatemer
     output:
     path "*"
     file("${name}.flnc.bam") into refine_merge_out
@@ -151,7 +153,6 @@ process run_refine{
     """
 
 }
-
 
 process merge_transcripts{
 
@@ -197,44 +198,49 @@ process merge_subreads{
 }
 
 
-process cluster_reads{
 
-    tag "clustering : $name"
-    publishDir "$params.output/$name/cluster", mode: 'copy'
+/*
+* Since Liz Tseng's single cell analysis guideline does not include clustering or polishing
+* I will omit these steps for now.
+*/
+//process cluster_reads{
 
-    input:
-    set name, file(refined) from refine_out.concat(cluster_in).dump(tag: 'cluster')
+    //tag "clustering : $name"
+    //publishDir "$params.output/$name/cluster", mode: 'copy'
 
-    output:
-    file "*"
-    set val(name), file("${name}.unpolished.bam") into cluster_out
+    //input:
+    //set name, file(refined) from refine_out.concat(cluster_in).dump(tag: 'cluster')
 
-    """
-    isoseq3 cluster ${refined} ${name}.unpolished.bam
-    """
-}
+    //output:
+    //file "*"
+    //set val(name), file("${name}.unpolished.bam") into cluster_out
+
+    //"""
+    //isoseq3 cluster ${refined} ${name}.unpolished.bam
+    //"""
+//}
 
 
-process polish_reads{
+//process polish_reads{
     
-    tag "polishing : $name"
+    //tag "polishing : $name"
 
-    publishDir "$params.output/$name/polish", mode: 'copy'
+    //publishDir "$params.output/$name/polish", mode: 'copy'
 
-    input:
-    set name, file(subreads_bam), file(unpolished_bam) from bam_names.concat(merged_subreads).join(cluster_out).dump(tag: 'polish')
-    //set name, file(subreads_bam), file(unpolished_bam) from polish_in.dump(tag: 'polish_2')
-    file(bam_pbi) from pbi_polish.collect().dump(tag: 'polish pbi')
+    //input:
+    //set name, file(subreads_bam), file(unpolished_bam) from bam_names.concat(merged_subreads).join(cluster_out).dump(tag: 'polish')
+    ////set name, file(subreads_bam), file(unpolished_bam) from polish_in.dump(tag: 'polish_2')
+    //file(bam_pbi) from pbi_polish.collect().dump(tag: 'polish pbi')
     
-    output:
-    file "*"
-    set name, file("${name}.polished.hq.fastq.gz") into polish_out
+    //output:
+    //file "*"
+    //set name, file("${name}.polished.hq.fastq.gz") into polish_out
     
-    """
-    isoseq3 polish ${unpolished_bam} ${subreads_bam} ${name}.polished.bam
-    """
+    //"""
+    //isoseq3 polish ${unpolished_bam} ${subreads_bam} ${name}.polished.bam
+    //"""
 
-}
+//}
 
 process align_reads{
 
