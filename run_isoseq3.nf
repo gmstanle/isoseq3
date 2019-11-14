@@ -1,13 +1,17 @@
 #!/usr/bin/env nextflow
+
+// specify on command line:
+// params.input (--input <input_dir_path>)
+// params.output (--output <output_dir_path>)
+
 params.merge = true
 params.align = true
+
+// Added by Geoff
 
 params.ref_fasta = params.genome ? params.genomes[ params.genome ].fasta_file ?: false : false
 params.intron_max = params.genome ? params.genomes[ params.genome ].intron_max ?: false : false
 params.primers = params.primer_type ? params.primers_stets[ params.primer_type ].primer_file ?: false : false
-
-// params.input is defined in the nextflow call by --input <value>
-// params.output is defined in the nextflow call by --output <value>
 
 log.info "IsoSeq3 NF  ~  version 3.1"
 log.info "====================================="
@@ -21,13 +25,23 @@ log.info "genome sequence: ${params.ref_fasta}"
 log.info "intron max length: ${params.intron_max}"
 log.info "\n"
 
-// input channels
-Channel
+
+// Geoff: this will need to be changed for ccs input. For now the easiest to do 
+//        is just comment out the old channel and instead define the ccs_out channel
+//        using fromPath input channels
+//Channel
+//    // get a pair of bam and bam.pbi files, change file.name to be the 'base' name (w/o .bam or .pbi)
+//    // see https://pbbam.readthedocs.io/en/latest/tools/pbindex.html for info on making .pbi file
+//    .fromFilePairs(params.input + '*.{bam,bam.pbi}') { file -> file.name.replaceAll(/.bam|.pbi$/,'') }
+//    .ifEmpty { error "Cannot find matching bam and pbi files: $params.input. Make sure your bam files are pb indexed." }
+//    .set { ccs_in }
+//// see https://github.com/nextflow-io/patterns/blob/926d8bdf1080c05de406499fb3b5a0b1ce716fcb/process-per-file-pairs/main2.nf
+
+// Geoff: for using indexed ccs reads as input
+Channel:
     .fromFilePairs(params.input + '*.{bam,bam.pbi}') { file -> file.name.replaceAll(/.bam|.pbi$/,'') }
     .ifEmpty { error "Cannot find matching bam and pbi files: $params.input. Make sure your bam files are pb indexed." }
-    .set { ccs_in }
-// see https://github.com/nextflow-io/patterns/blob/926d8bdf1080c05de406499fb3b5a0b1ce716fcb/process-per-file-pairs/main2.nf
-
+    .set(ccs_out_indexed)
 Channel
     .fromPath(params.input + '*.bam')
     .ifEmpty { error "Cannot find matching bam files: $params.input." }
@@ -47,15 +61,18 @@ Channel
     .fromPath(params.ref_fasta)
 
     // I assume this is a mistake. This should say Cannot find reference file $params.ref_fasta
+//    .ifEmpty { error "Cannot find primer file: $params.primers" }
     .ifEmpty { error "Cannot find reference file: $params.ref_fasta" }
     .set {ref_fasta}
 
+// Geoff: why is this step needed? The 
 //TODO replace with specific stating of the pbi
 Channel
     .fromPath(params.input + '*.bam.pbi')
     .ifEmpty { error "Cannot find matching bam.pbi files: $params.input." }
     .into { pbi_merge_trans; pbi_merge_sub; pbi_polish }
 
+// This process is currently broken since I am using indexed, ccs reads as input.
 process ccs_calling{
 
         tag "circular consensus sequence calling: $name"
@@ -65,9 +82,16 @@ process ccs_calling{
         input:
         set name, file(bam) from ccs_in.dump(tag: 'input')
 
+        // To make this compatible with the new pipeline, need to add an indexing step
+        // and a channel ccs_out_indexed, which is now the input into remove_primers
+        // That output will need to be in the same format as .fromFilePairs output
         output:
         file "*"
         set val(name), file("${name}.ccs.bam") into ccs_out
+        
+        // Geoff
+        when:
+            !params.input_is_ccs
      
         //TODO make minPasses param as parameter
         """
@@ -76,26 +100,38 @@ process ccs_calling{
 }
 
 
-process remove_primers{
+// Geoff: TODO: edit this for the primer design I used 
+// Geoff: changed to use indexed .bam files (.pbi)
+// Geoff: renamed demux which makes for sense for multiplexed samples
+//        lima --ccs both demuxes and removes primers
+//process remove_primers{
+process demux{
 
     tag "primer removal: $name"
 
     publishDir "$params.output/$name/lima", mode: 'copy'
 
     input:
-    set name, file(bam) from ccs_out.dump(tag: 'ccs_name')
-    file primers from primers_remove.collect()
+    // weird usage of dump - it is normally for debugging.
+//    set name, file(bam) from ccs_out.dump(tag: 'ccs_name')
+    set name, file(bam) from ccs_out_indexed
+    path primers from primers_remove.collect()
     
     output:
-    file "*"
-    set val(name), file("${name}.fl.primer_5p--primer_3p.bam") into primers_removed_out
+    path "*"
+    //set val(name), file("${name}.fl.primer_5p--primer_3p.bam") into primers_removed_out
+    // TODO: get file output name
+    set val(name), file("${name}.trimmed.bam") into primers_removed_out
  
+//    """
+//    lima $bam $primers ${name}.fl.bam --isoseq --no-pbi
+//    """
     """
-    lima $bam $primers ${name}.fl.bam --isoseq --no-pbi
+    lima --ccs $bam $primers ${name}.trimmed.bam
     """
 }
 
-
+// Geoff: added bamtools convert (as per https://github.com/Magdoll/cDNA_Cupcake/wiki/Iso-Seq-Single-Cell-Analysis:-Recommended-Analysis-Guidelines#4-remove-polya-tail-and-artificial-concatemers)
 process run_refine{
 
     tag "refining : $name"
@@ -103,16 +139,17 @@ process run_refine{
 
     input:
     set name, file(bam) from primers_removed_out.dump(tag: 'primers_removed')
-    file primers from primers_refine.collect()
+    path primers from primers_refine.collect()
     
     output:
-    file "*"
+    path "*"
     file("${name}.flnc.bam") into refine_merge_out
     set val(name), file("${name}.flnc.bam") into refine_out
  
     //TODO update input & output channels
     """
     isoseq3 refine $bam $primers ${name}.flnc.bam --require-polya
+    bamtools convert -format fasta -in ${name}.flnc.bam > flnc.fasta
     """
 
 }
@@ -131,7 +168,7 @@ process merge_transcripts{
     output:
     set val("merged"), file("merged.flnc.xml") into cluster_in
 
-    when:
+    when: // the conditional for whether to merge or not
     params.merge
 
     """
