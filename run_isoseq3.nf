@@ -131,7 +131,6 @@ process demux{
     """
 }
 
-// Geoff: added bamtools convert (as per https://github.com/Magdoll/cDNA_Cupcake/wiki/Iso-Seq-Single-Cell-Analysis:-Recommended-Analysis-Guidelines#4-remove-polya-tail-and-artificial-concatemers)
 process run_refine{
 
     tag "refining : $name"
@@ -149,7 +148,6 @@ process run_refine{
     //TODO update input & output channels
     """
     isoseq3 refine $bam $primers ${name}.flnc.bam --require-polya
-    bamtools convert -format fasta -in ${name}.flnc.bam > flnc.fasta
     """
 
 }
