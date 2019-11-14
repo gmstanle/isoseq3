@@ -1,5 +1,5 @@
 # scIsoSeq
-This is a [nextflow](https://github.com/nextflow-io/nextflow) pipeline for analyzing multiplexed single-cell IsoSeq (PacBio long-read RNA sequencing). This is configured particularly for data from Smart-Seq2 cDNA libraries with additional barcodes added for multiplexing on a PacBio system. Currently, it assumes that the input is indexed CCS reads.
+This is a [nextflow](https://github.com/nextflow-io/nextflow) pipeline for analyzing multiplexed single-cell IsoSeq (PacBio long-read RNA sequencing). This is configured particularly for data from Smart-Seq2 cDNA libraries with additional barcodes added for multiplexing on a PacBio system. Currently, it assumes that the input is indexed CCS reads. The pipeline is a combination of [Isoseq3](https://github.com/PacificBiosciences/IsoSeq/blob/master/README_v3.2.md) and [cDNA_Cupcake](https://github.com/Magdoll/cDNA_Cupcake/wiki/Iso-Seq-Single-Cell-Analysis:-Recommended-Analysis-Guidelines#umi) guidelines.
 
 ## Setup
 ### Requirements
