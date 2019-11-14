@@ -11,8 +11,8 @@ The current pipeline is designed to run with a SLURM scheduler.
 To make it run for your group edit the `projectName` & `fasta` parameters in the the mendel.config file to fit to your group project and needs. To make it run on another infrastructure simply add a new nextflow config file in the conf folder and source via the nextflow.config file. See [here](https://www.nextflow.io/docs/latest/config.html) for more information. 
 
 ## Workflow of the pipeline
-2. primer removal
-3. refine reads
+2. demuxing and primer removal (lima)
+3. refine reads (isoseq3)
 4. merge samples (optional)
 3. cluster reads 
 4. polish reads
