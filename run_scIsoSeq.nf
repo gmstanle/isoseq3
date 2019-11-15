@@ -1,10 +1,32 @@
 #!/usr/bin/env nextflow
 
+/*
+* Input is a single .bam file of CCS reads (name.ccs.bam) plus index file.
+* If there is output from multiple flowcells, merge them with bamtools merge 
+* (NOT samtools,see https://github.com/PacificBiosciences/PacBioFileFormats/wiki/BAM-recipes#merging).
+* Then index with pbindex.
+* Future versions of the pipeline should include these steps for reproducibility.
+*/
+
+/*
+* Most of the processes in the pipeline are designed to save their output, even though mostly their
+* output is intermediate and not used for downstream analysis. That is why they have 
+* publishDir calls and why everything is saved as a file with a specific name, rather than
+* just passed to a channel and therefore only saved to tmp working folders (which would be the most Nextflow way of doing it). 
+* This allows for the output of each intermediate step to be analyzed post facto.
+* That makes sense since this is an early stage experiment,
+* but makes the code less clean and increases the storage required. A pipeline for this protocol,
+* once it is more standardized, would avoid the extra code of saving those intermediate files 
+* and just pass them directly into channels.
+* See https://github.com/nextflow-io/rnatoy for an example pipeline where only the final file
+* is saved to an output directory.
+*/
+
 // specify on command line:
 // params.input (--input <input_dir_path>)
 // params.output (--output <output_dir_path>)
 
-params.merge = true
+//params.merge = true
 params.align = true
 
 // Added by Geoff
@@ -18,7 +40,7 @@ log.info "====================================="
 log.info "input paths: ${params.input}"
 log.info "output paths: ${params.output}"
 log.info "primer set: ${params.primer_type}"
-log.info "merge smrt cells: ${params.merge}"
+// log.info "merge smrt cells: ${params.merge}"
 log.info "align reads: ${params.align}"
 log.info "genome: ${params.genome}"
 log.info "genome sequence: ${params.ref_fasta}"
@@ -39,7 +61,7 @@ log.info "\n"
 
 // Geoff: for using indexed ccs reads as input
 Channel:
-    .fromFilePairs(params.input + '*.{bam,bam.pbi}') { file -> file.name.replaceAll(/.bam|.pbi$/,'') }
+    .fromFilePairs(params.input + '*.ccs.{bam,bam.pbi}') { file -> file.name.replaceAll(/.ccs.bam$|.ccs.bam.pbi$/,'') }
     .ifEmpty { error "Cannot find matching bam and pbi files: $params.input. Make sure your bam files are pb indexed." }
     .set(ccs_out_indexed)
 Channel
@@ -121,13 +143,13 @@ process demux{
     path "*"
     //set val(name), file("${name}.fl.primer_5p--primer_3p.bam") into primers_removed_out
     // TODO: get file output name
-    set val(name), file("${name}.trimmed.bam") into primers_removed_out
+    set val(name), file("${name}.trimmed.bam") into trimmed_out 
  
 //    """
 //    lima $bam $primers ${name}.fl.bam --isoseq --no-pbi
 //    """
     """
-    lima --ccs --peek-guess $bam $primers ${name}.trimmed.bam
+    lima --ccs $bam $primers ${name}.trimmed.bam
     """
 }
 
@@ -137,14 +159,13 @@ process run_refine{
     publishDir "$params.output/$name/refine", mode: 'copy'
 
     input:
-    set name, file(bam) from primers_removed_out.dump(tag: 'primers_removed')
+    set name, file(bam) from trimmed_out.dump(tag: 'trimmed')
     path primers from primers_refine.collect()
     
 
     // flnc = full-length non-concatemer
     output:
     path "*"
-    file("${name}.flnc.bam") into refine_merge_out
     set val(name), file("${name}.flnc.bam") into refine_out
  
     //TODO update input & output channels
@@ -154,123 +175,85 @@ process run_refine{
 
 }
 
-process merge_transcripts{
 
-    tag "merging transcript sets ${bam}"
+// I am not sure whether the cluster and polish steps are necessary. The PacBio IsoSeq3
+// page has them included but Liz Tseng's "best practices for single-cell IsoSeq" does not.
+// As of v3.2, both clustering and polishing are performed by IsoSeq cluster
+process cluster_reads{
 
-    publishDir "$params.output/merged", mode: 'copy'
+    tag "clustering : $name"
+    publishDir "$params.output/$name/cluster", mode: 'copy'
 
     input:
-    file(bam) from refine_merge_out.collect().dump(tag: 'merge transcripts bam')
-    file(bam_pbi) from pbi_merge_trans.collect().dump(tag: 'merge transcripts pbi')
+    set name, file(refined) from refine_out.dump(tag: 'cluster')
 
     output:
-    set val("merged"), file("merged.flnc.xml") into cluster_in
-
-    when: // the conditional for whether to merge or not
-    params.merge
+    file "*"
+    set val(name), file("${name}.polished.bam") into cluster_out
 
     """
-    dataset create --type TranscriptSet merged.flnc.xml ${bam}
+    isoseq3 cluster ${refined} ${name}.polished.bam
     """
 }
 
 
-process merge_subreads{
-
-    tag "merging subreads ${bam}"
-
-    publishDir "$params.output/merged", mode: 'copy'
-
-    input:
-    file(bam) from bam_files.collect().dump(tag: 'merge subreads')
-    file(bam_pbi) from pbi_merge_sub.collect().dump(tag: 'merge subreads pbi')
-
-    output:
-    set val("merged"), file("merged.subreadset.xml") into merged_subreads
-
-    when:
-    params.merge
-
-    """
-    dataset create --type SubreadSet merged.subreadset.xml ${bam}
-    """
-}
-
-
-
-/*
-* Since Liz Tseng's single cell analysis guideline does not include clustering or polishing
-* I will omit these steps for now.
-*/
-//process cluster_reads{
-
-    //tag "clustering : $name"
-    //publishDir "$params.output/$name/cluster", mode: 'copy'
-
-    //input:
-    //set name, file(refined) from refine_out.concat(cluster_in).dump(tag: 'cluster')
-
-    //output:
-    //file "*"
-    //set val(name), file("${name}.unpolished.bam") into cluster_out
-
-    //"""
-    //isoseq3 cluster ${refined} ${name}.unpolished.bam
-    //"""
-//}
-
-
-//process polish_reads{
-    
-    //tag "polishing : $name"
-
-    //publishDir "$params.output/$name/polish", mode: 'copy'
-
-    //input:
-    //set name, file(subreads_bam), file(unpolished_bam) from bam_names.concat(merged_subreads).join(cluster_out).dump(tag: 'polish')
-    ////set name, file(subreads_bam), file(unpolished_bam) from polish_in.dump(tag: 'polish_2')
-    //file(bam_pbi) from pbi_polish.collect().dump(tag: 'polish pbi')
-    
-    //output:
-    //file "*"
-    //set name, file("${name}.polished.hq.fastq.gz") into polish_out
-    
-    //"""
-    //isoseq3 polish ${unpolished_bam} ${subreads_bam} ${name}.polished.bam
-    //"""
-
-//}
+// Following best practices here:
+// https://github.com/Magdoll/cDNA_Cupcake/wiki/Best-practice-for-aligning-Iso-Seq-to-reference-genome:-minimap2,-deSALT,-GMAP,-STAR,-BLAT
 
 process align_reads{
 
     tag "mapping : $name"
 
+    // not clear if all files produced by the code or just the files specifid
+    // in output are copied
     publishDir "$params.output/$name/minimap2", mode: 'copy'
 
     input:
-    set name, file(sample) from polish_out.dump(tag: 'align')
-    file fasta from ref_fasta.collect()
+   // set name, file(sample) from polish_out.dump(tag: 'align')
+    set name, file(clustered_bam) from cluster_out
+    path ref from ref_fasta.collect()
 
     output:    
-    file "*.{bam,bed,log}"
+    path "*.{sorted.sam,log}"
+    set name, file("${name}.aln.bam") into aligned_out
 
     when:
     params.align
 
     """
-    minimap2 $fasta ${sample} \
+    minimap2 $ref $clustered_bam \
         -G $params.intron_max \
         -H \
         -ax splice \
         -C 5 \
-        -u f \
-        -p 0.9 \
+        -O6,24 \
+        -B4 \
+        -uf \
+        --secondary=no \
         -t ${task.cpus} > ${name}.aln.sam \
         2> ${name}.log
 
-    samtools view -Sb ${name}.aln.sam > ${name}.aln.bam
+    """
+}
 
-    bedtools bamtobed -bed12 -i ${name}.aln.bam > ${name}.aln.bed
+
+// from https://github.com/Magdoll/cDNA_Cupcake/wiki/Cupcake:-supporting-scripts-for-Iso-Seq-after-clustering-step#collapse-redundant-isoforms-has-genome
+process collapse_isoforms{
+
+    publishDir "$params.output/$name/collapse_isoforms", mode: 'copy'
+
+
+    input:
+        set name, file(aligned_sam) from aligned_out
+
+    output:
+        path "*{gff,fq,txt}"
+
+
+    """
+    sort -k 3,3 -k 4,4n $aligned_sam > sorted.sam
+    collapse_isoforms_by_sam.py --input sorted.sam \
+      -s flnc.fasta.sorted.sam -c 0.99 -i 0.95 -o flnc.5merge
+
     """
 }

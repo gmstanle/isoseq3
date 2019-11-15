@@ -6,10 +6,13 @@ channels:
   - bioconda
   - defaults
 dependencies:
+# how to include cupcake and sqanti in dependencies?? I think this can be done in the docker file
+  - conda-forge::biopython=1.74 # biopython docs suggest using conda-forge 
   - isoseq3=3.2
   - minimap2=2.17
-  - bedtools=2.27.1
+  # - bedtools=2.27.1
   - samtools=1.9
+  - bamtools=2.5
   - pbcoretools=0.2.4 # needed for merging SMRT cells
-  - lima=
+  - lima=1.10
   # - pbccs # only needed to do ccs calling
