@@ -32,6 +32,7 @@ params.align = true
 // Added by Geoff
 
 params.ref_fasta = params.genome ? params.genomes[ params.genome ].fasta_file ?: false : false
+params.ref_gtf = params.genome ? params.genomes[ params.genome ].gtf_file ?: false : false
 params.intron_max = params.genome ? params.genomes[ params.genome ].intron_max ?: false : false
 params.primers = params.primer_type ? params.primers_stets[ params.primer_type ].primer_file ?: false : false
 
@@ -85,8 +86,12 @@ Channel
     // I assume this is a mistake. This should say Cannot find reference file $params.ref_fasta
 //    .ifEmpty { error "Cannot find primer file: $params.primers" }
     .ifEmpty { error "Cannot find reference file: $params.ref_fasta" }
-    .set {ref_fasta}
+    .into {ref_fasta_align; ref_fasta_annotate}
 
+Channel
+    .fromPath(params.ref_gtf)
+    .ifEmpty { error "Cannot find reference file: $params.ref_gtf"}
+    .into {ref_gtf_annotate}
 // Geoff: why is this step needed? The 
 //TODO replace with specific stating of the pbi
 Channel
@@ -166,11 +171,13 @@ process run_refine{
     // flnc = full-length non-concatemer
     output:
     path "*"
-    set val(name), file("${name}.flnc.bam") into refine_out
+    set val(name), file("${name}.flnc.fasta") into refine_out
+    path "${name}.flnc.fasta" into refine_for_collapse
  
     //TODO update input & output channels
     """
-    isoseq3 refine $bam $primers ${name}.flnc.bam --require-polya
+    isoseq3 refine $bam $primers flnc.bam --require-polya
+    bamtools convert -format fasta -in flnc.bam > ${name}.flnc.fasta
     """
 
 }
@@ -179,27 +186,27 @@ process run_refine{
 // I am not sure whether the cluster and polish steps are necessary. The PacBio IsoSeq3
 // page has them included but Liz Tseng's "best practices for single-cell IsoSeq" does not.
 // As of v3.2, both clustering and polishing are performed by IsoSeq cluster
-process cluster_reads{
+//process cluster_reads{
 
-    tag "clustering : $name"
-    publishDir "$params.output/$name/cluster", mode: 'copy'
+    //tag "clustering : $name"
+    //publishDir "$params.output/$name/cluster", mode: 'copy'
 
-    input:
-    set name, file(refined) from refine_out.dump(tag: 'cluster')
+    //input:
+    //set name, file(refined) from refine_out.dump(tag: 'cluster')
 
-    output:
-    file "*"
-    set val(name), file("${name}.polished.bam") into cluster_out
+    //output:
+    //file "*"
+    //set val(name), file("${name}.polished.fasta") into cluster_out
+    //path "${name}.polished.fasta" into polished_for_collapse
 
-    """
-    isoseq3 cluster ${refined} ${name}.polished.bam
-    """
-}
-
+    //"""
+    //isoseq3 cluster ${refined} polished.bam
+    //bamtools convert -format fasta -in polished.bam > ${name}.polished.fasta
+    //"""
+//}
 
 // Following best practices here:
 // https://github.com/Magdoll/cDNA_Cupcake/wiki/Best-practice-for-aligning-Iso-Seq-to-reference-genome:-minimap2,-deSALT,-GMAP,-STAR,-BLAT
-
 process align_reads{
 
     tag "mapping : $name"
@@ -210,22 +217,22 @@ process align_reads{
 
     input:
    // set name, file(sample) from polish_out.dump(tag: 'align')
-    set name, file(clustered_bam) from cluster_out
-    path ref from ref_fasta.collect()
+    //set name, file(polished_fasta) from cluster_out
+    set name, file(flnc_fasta) from refine_out 
+    path ref from ref_fasta_align
 
     output:    
     path "*.{sorted.sam,log}"
-    set name, file("${name}.aln.bam") into aligned_out
+    set name, file("${name}.aln.sam") into align_out
 
     when:
     params.align
 
     """
-    minimap2 $ref $clustered_bam \
+    minimap2 $ref $flnc_fasta \
         -G $params.intron_max \
-        -H \
         -ax splice \
-        -C 5 \
+        -C5 \
         -O6,24 \
         -B4 \
         -uf \
@@ -236,7 +243,7 @@ process align_reads{
     """
 }
 
-
+// TODO: finish labeling output
 // from https://github.com/Magdoll/cDNA_Cupcake/wiki/Cupcake:-supporting-scripts-for-Iso-Seq-after-clustering-step#collapse-redundant-isoforms-has-genome
 process collapse_isoforms{
 
@@ -244,16 +251,58 @@ process collapse_isoforms{
 
 
     input:
-        set name, file(aligned_sam) from aligned_out
+        set name, file(aligned_sam) from align_out
+        path polished_fasta from polished_for_collapse
 
     output:
         path "*{gff,fq,txt}"
+        set name, file("${name}.flnc.5merge.collapsed.rep.fa") into collapse_for_annotate
+        set name, file("${name}.flnc.5merge.collapsed.rep.fa") into collapse_for_filter
+        path "${name}.flnc.5merge.collapsed.rep.fa" into collapse_for_filter
+        path "${name}.flnc.5merge.collapsed.rep.fa" into collapse_for_filter
 
 
     """
     sort -k 3,3 -k 4,4n $aligned_sam > sorted.sam
-    collapse_isoforms_by_sam.py --input sorted.sam \
-      -s flnc.fasta.sorted.sam -c 0.99 -i 0.95 -o flnc.5merge
+    collapse_isoforms_by_sam.py --input polished_fasta \
+      -s sorted.sam -c 0.99 -i 0.95 -o ${name}.flnc.5merge
 
+    """
+}
+
+process annotate{
+     
+    publishDir "$params.output/$name/annotate", mode: 'copy'
+
+    input:
+        set name, file(aligned_sam) from collapse_out
+        path gtf_ref from ref_gtf
+        path fasta_ref from ref_fasta_annotate
+
+
+    output:
+        path "*"
+        set name, file("${name}.flnc.5merge.collapsed.rep_classification.txt") into annotate_classification
+
+    """
+    python sqanti_qc2.py -t 30 ${name}.flnc.5merge.collapsed.rep.fa \
+    $gtf_ref $fasta_ref
+    """ 
+}
+
+process filter{
+
+    publishDir "$params.output/$name/filter", mode: 'copy'
+    
+    input:
+
+        set name, file("${name}.flnc.5merge.collapsed.rep_classification.txt") from annotate_classification
+
+    """
+    python sqanti_filter2.py \
+     flnc.5merge.collapsed.rep_classification.txt \
+     flnc.5merge.collapsed.rep.renamed.fasta \
+     flnc.5merge.collapsed.rep.fa.sam \
+     flnc.5merge.collapsed.gff
     """
 }
