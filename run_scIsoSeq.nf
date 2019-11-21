@@ -243,6 +243,8 @@ process align_reads{
     """
 }
 
+// How does this process know to take only from the channels with a matching $name?
+// For now it doesn't matter since I'm only dealing with one input file
 // TODO: finish labeling output
 // from https://github.com/Magdoll/cDNA_Cupcake/wiki/Cupcake:-supporting-scripts-for-Iso-Seq-after-clustering-step#collapse-redundant-isoforms-has-genome
 process collapse_isoforms{
@@ -256,23 +258,33 @@ process collapse_isoforms{
 
     output:
         path "*{gff,fq,txt}"
-        set name, file("${name}.flnc.5merge.collapsed.rep.fa") into collapse_for_annotate
-        set name, file("${name}.flnc.5merge.collapsed.rep.fa") into collapse_for_filter
-        path "${name}.flnc.5merge.collapsed.rep.fa" into collapse_for_filter
-        path "${name}.flnc.5merge.collapsed.rep.fa" into collapse_for_filter
+        set name, file("${name}.collapsed.rep.fq") into collapse_for_annotate
+        set name, file("${name}.collapsed.rep.fq") into collapse_for_filter
+        path "${name}.collapsed.group.txt" into collapse_for_filter
 
 
+    // output is out.collapsed.gff, out.collapsed.rep.fq, out.collapsed.group.txt
     """
     sort -k 3,3 -k 4,4n $aligned_sam > sorted.sam
     collapse_isoforms_by_sam.py --input polished_fasta \
-      -s sorted.sam -c 0.99 -i 0.95 -o ${name}.flnc.5merge
+      -s sorted.sam -c 0.99 -i 0.95 -o ${name}
 
     """
 }
 
-process annotate{
+
+/* This step performs correction and annotation of the reads according to a genome referece.
+* The best docu is here: https://bitbucket.org/ConesaLab/sqanti/src/master/
+* even though we are using the SQANTI2 pipeline for compatibility with the rest of the 
+* PacBio recommended single cell pipeline https://github.com/Magdoll/SQANTI2#sqanti2
+* There are several output files:
+* name_corrected.fasta, the corrected LR sequences
+* name_corrected.gtf, name_corrected.gff, name_corrected.sam, alignment of the corrected sequences
+*  
+*/
+process correct_annotate{
      
-    publishDir "$params.output/$name/annotate", mode: 'copy'
+    publishDir "$params.output/$name/sqanti_qc", mode: 'copy'
 
     input:
         set name, file(aligned_sam) from collapse_out
@@ -281,28 +293,49 @@ process annotate{
 
 
     output:
-        path "*"
-        set name, file("${name}.flnc.5merge.collapsed.rep_classification.txt") into annotate_classification
+        path "*{fasta,gtf,sam,txt}"
+        set name, file("${name}.sqanti_classification.txt") into classification_for_filter
+        path "${name}.sqanti_corrected.fasta" into fasta_for_filter
+        path "${name}.sqanti_corrected.gtf" into gtf_for_filter
+        path "${name}.sqanti_corrected.sam" into sam_for_filter
 
     """
-    python sqanti_qc2.py -t 30 ${name}.flnc.5merge.collapsed.rep.fa \
+    python sqanti_qc2.py -t 30 $aligned_sam \
     $gtf_ref $fasta_ref
+
+    mv *.fasta ${name}.sqanti_corrected.fasta
+    mv *.gtf ${name}.sqanti_corrected.gtf
+    mv *.sam ${name}.sqanti_corrected.sam
+    mv *classication.txt ${name}.sqanti_classification.txt
+    mv *junctions.txt ${name}.sqanti_junctions.txt
     """ 
 }
 
+/*
+* This is the modified filter function, docs here https://github.com/Magdoll/SQANTI2#filtering-isoforms-using-sqanti2
+* The output is not discussed in those docs but is mentioned here https://github.com/Magdoll/cDNA_Cupcake/wiki/Iso-Seq-Single-Cell-Analysis:-Recommended-Analysis-Guidelines#8-filter-artifacts
+*/
 process filter{
 
-    publishDir "$params.output/$name/filter", mode: 'copy'
+    publishDir "$params.output/$name/sqanti_filter", mode: 'copy'
     
     input:
 
-        set name, file("${name}.flnc.5merge.collapsed.rep_classification.txt") from annotate_classification
+        set name, file("${name}.sqanti_classification.txt") from classification_for_filter
+        path fasta from fasta_for_filter
+        path gtf   from gtf_for_filter
+        path sam   from sam_for_filter
+
+    output:
+        path "*"
 
     """
     python sqanti_filter2.py \
-     flnc.5merge.collapsed.rep_classification.txt \
-     flnc.5merge.collapsed.rep.renamed.fasta \
-     flnc.5merge.collapsed.rep.fa.sam \
-     flnc.5merge.collapsed.gff
+     ${name}.sqanti_classification.txt \
+     $fasta \
+     $sam \
+     $gtf
+
+     mv *.fasta ${name}.sqanti_filtered.fasta
     """
 }

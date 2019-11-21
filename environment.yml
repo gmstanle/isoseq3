@@ -1,5 +1,7 @@
 # You can use this file to create a conda environment for this pipeline:
 #   conda env create -f environment.yml
+
+# TODO: add SQANTI and Cupcake dependencies
 name: nf-isoseq
 channels:
   - conda-forge
