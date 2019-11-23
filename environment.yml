@@ -9,6 +9,7 @@ channels:
   - defaults
 dependencies:
 # how to include cupcake and sqanti in dependencies?? I think this can be done in the docker file
+  - python=2.7
   - conda-forge::biopython=1.74 # biopython docs suggest using conda-forge 
   - isoseq3=3.2
   - minimap2=2.17
@@ -18,3 +19,5 @@ dependencies:
   - pbcoretools=0.2.4 # needed for merging SMRT cells
   - lima=1.10
   # - pbccs # only needed to do ccs calling
+  - pip:
+    - git+https://github.com/Magdoll/cDNA_Cupcake.git@Py2_v8.7.x
